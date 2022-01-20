@@ -31,7 +31,7 @@ class ImUnity(VAEGAN):
         #check dimension of model :
         self.num_sites = num_sites
         self.num_sequences = num_sequences
-        self.biological_features = biological_features
+        self.biological_features = biological_features 
         super(ImUnity, self).__init__(input_shape, data_path, num_channels, model, pool_size, filter_shape, dropout, batch_norm, initial_learning_rate, batch_size, model_type, padding, strides, weights_path, activation, depth = depth, save_path = save_path, name = name, decay_rate = decay_rate, features_factor = features_factor, latent_dim = latent_dim, contrast_encoder = True)
         if class_weights is not None:
             assert len(class_weights) == self.num_sites, 'Error with class_weights for sites_module loss'
@@ -40,11 +40,12 @@ class ImUnity(VAEGAN):
 
         #setting up modules
         self.modules_loss = [binary_ce if self.num_sites == 2 else categorical_ce]
+        self.loss_ratios = loss_ratios
         if biological_features is not None:
             self.modules_loss += [binary_ce for f in biological_features]
+            assert len(self.loss_ratios) == len(self.biological_features) + 2, "Error in Loss ratios, it must match number  of modules (Group + biological ones + Sequence)" 
         self.modules_loss += [binary_ce if self.num_sequences == 2 else categorical_ce] * (self.num_sequences > 1)  
-        self.loss_ratios = loss_ratios
-        assert len(self.loss_ratios) == len(self.biological_features) + 2, "Error in Loss ratios, it must match number  of modules (Group + biological ones + Sequence)" 
+        print(self.modules_loss)
         self.optimizer_modules = tf.keras.optimizers.Adam(self.learning_rate, beta_1=0.5)
         self.optimizer.append(self.optimizer_modules)
         self.scheduler = Scheduler(self.optimizer,
@@ -70,11 +71,11 @@ class ImUnity(VAEGAN):
         f_site = Dense(128, kernel_initializer = self.weights_init, activity_regularizer=l1(0.0001))(f)
         f_site = ReLU()(f_site)
         site = Dense(1 if self.num_sites == 2 else self.num_sites, kernel_initializer = self.weights_init)(f_site)
-        for _ in self.biological_features:
-            f_d = Dense(128, kernel_initializer = self.weights_init, activity_regularizer=l1(0.0001))(f)
-            f_d  = ReLU()(f_d)
-            modules_outputs.append(Dense(1, kernel_initializer = self.weights_init)(f_d))
-        f_site = ReLU()(f_site)
+        if self.biological_features is not None:
+            for _ in self.biological_features:
+                f_d = Dense(128, kernel_initializer = self.weights_init, activity_regularizer=l1(0.0001))(f)
+                f_d  = ReLU()(f_d)
+                modules_outputs.append(Dense(1, kernel_initializer = self.weights_init)(f_d))
         if self.num_sequences > 1:
             #we try to harmonize multiple sequence types at once here
             f_sequence = Dense(128, kernel_initializer = self.weights_init, activity_regularizer=l1(0.0001))(f)
@@ -138,7 +139,7 @@ class ImUnity(VAEGAN):
         ss_loss = ssim_loss(generated, style)
         
         #Total loss composed of all losses presented above
-        total_gen_loss = 2E0 * gan_loss + 1E2 * l1_loss_style + 1E-2 * gan_loss_modules + 1E-6 * kl + 1E0 * ss_loss + 0E0 * l1_loss_shift
+        total_gen_loss = 2E0 * gan_loss + 1E2 * l1_loss_style + 1E-2 * gan_loss_modules + 1E-6 * kl + 1E0 * ss_loss# + 0E0 * l1_loss_shift
         return total_gen_loss, gan_loss, gan_loss_modules, l1_loss_cost, l1_loss_style, kl, l1_loss_shift, ss_loss
 
 
@@ -161,6 +162,8 @@ class ImUnity(VAEGAN):
             disc_real_output = self.discriminator(X_gamma, training=True)
             disc_fake_output = self.discriminator(gen_output_sig, training=True)
             modules_output = self.modules(z_anat, training = True)
+            if self.biological_features is None and self.num_sequences == 1:
+                modules_output = [modules_output]
             # compute losses
             disc_loss = discriminator_loss(disc_real_output, disc_fake_output)
             total_gen_loss, gan_loss, gen_loss_modules, l1_loss_cost, l1_loss_style, kl, l1_loss_shift, ss_loss = self.dagan_generator_loss(X, gen_output, X_gen, X_gamma, z_style, z, mean, logvar, z_generated, disc_fake_output, modules_output, y.copy(), epoch)
@@ -220,7 +223,8 @@ class ImUnity(VAEGAN):
             disc_real_output = self.discriminator(X_gamma, training=False)
             disc_fake_output = self.discriminator(gen_output_sig, training=False)
             modules_output = self.modules(z_anat, training = False)
-            
+            if self.biological_features is None and self.num_sequences == 1:
+                modules_output = [modules_output]
             # compute losses
             disc_loss = discriminator_loss(disc_real_output, disc_fake_output)
             total_gen_loss, gan_loss, gen_loss_modules, l1_loss_cost, l1_loss_style, kl, l1_loss_shift, ss_loss = self.dagan_generator_loss(X, gen_output, X_gen, X_gamma, z_style, z, mean, logvar, z_generated, disc_fake_output, modules_output, y.copy(), epoch)
@@ -248,8 +252,8 @@ class ImUnity(VAEGAN):
             sub_dict = pickle.load(f)
         while True:
             label_site = np.zeros((self.batch_size, 1 if self.num_sites == 2 else self.num_sites))
-            labels_bio = np.zeros((len(self.biological_features), self.batch_size,1))
             label_sequence = np.zeros((self.batch_size, 1 if self.num_sequences == 2 else self.num_sequences))
+            labels_bio = np.zeros((len(self.biological_features), self.batch_size,1)) if self.biological_features is not None else []
             indexes = np.random.choice(num_patches, self.batch_size)
             # Generate data
             for i, ID in enumerate(indexes):
@@ -271,9 +275,10 @@ class ImUnity(VAEGAN):
                     label_site[i][int(data["group"].item()["Group"])] = 1
                 bio_f = []
                 try:
-                    for n, name in enumerate(self.biological_features):
-                        if self.loss_ratios[n] > 0:
-                            labels_bio[n, i] = data["group"].item()[name]
+                    if self.biological_features	is not None :
+                        for n, name in enumerate(self.biological_features):
+                            if self.loss_ratios[n] > 0:
+                                labels_bio[n, i] = data["group"].item()[name]
                     if self.num_sequences == 2:
                         label_sequence[i] = data["group"].item()["Sequence"]
                     elif self.num_sequences > 2:
@@ -286,7 +291,10 @@ class ImUnity(VAEGAN):
                     if np.random.uniform() < (0.5 / len(self.augmentations)):
                         X[i] = augmentation(X[i])
             labels_bio = [l for l in labels_bio]
-            yield X, [Y, label_site] + labels_bio + [label_sequence] * (self.num_sequences > 1)
+            if self.biological_features is not None:
+                yield X, [Y, label_site] + labels_bio + [label_sequence] * (self.num_sequences > 1)
+            else:
+                yield X, [Y, label_site] + [label_sequence] * (self.num_sequences > 1)
 
     def generator_val(self):
         """
@@ -297,7 +305,7 @@ class ImUnity(VAEGAN):
         X = np.empty((num_patches, *self.input_shape, self.num_channels), dtype = np.float32)
         Y = np.empty((2, num_patches, *self.input_shape, self.num_channels), dtype = np.float32)
         y_site = np.zeros((num_patches, 1 if self.num_sites == 2 else self.num_sites))
-        labels_bio = np.zeros((len(self.biological_features), num_patches, 1))
+        labels_bio = np.zeros((len(self.biological_features), num_patches, 1)) if self.biological_features is not None else []
         y_sequence = np.zeros((num_patches, 1 if self.num_sequences == 2 else self.num_sequences))
         sub_dict = None
         with open("%s/val/subjects_patches.pkl" % (self.data_path), "rb") as f:
@@ -316,9 +324,10 @@ class ImUnity(VAEGAN):
             else:
                 y_site[i][int(data["group"].item()["Group"])] = 1
             try:
-                for n, name in enumerate(self.biological_features):
-                    if self.loss_ratios[n] > 0:
-                        labels_bio[n, i] = data["group"].item()[name]
+                if self.biological_features is not None :
+                    for n, name in enumerate(self.biological_features):
+                        if self.loss_ratios[n] > 0:
+                            labels_bio[n, i] = data["group"].item()[name]
                 if self.num_sequences == 2:
                     y_sequence[i] = data["group"].item()["Sequence"]
                 elif self.num_sequences > 2:
@@ -327,7 +336,10 @@ class ImUnity(VAEGAN):
                 #case no sex or asd specified
                 pass
         labels_bio = [l for l in labels_bio]
-        return X, [Y, y_site] + labels_bio + [y_sequence] * (self.num_sequences > 1)
+        if self.biological_features is not None:
+            return X, [Y, y_site] + labels_bio + [y_sequence] * (self.num_sequences > 1)
+        else:
+            return X, [Y, y_site] + [y_sequence] * (self.num_sequences > 1)
 
     def infer_subject(self, sub_path, contrast, num_patches):
         X = np.empty((num_patches, *self.input_shape, self.num_channels))

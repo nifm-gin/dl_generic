@@ -182,7 +182,6 @@ def generate_patches(data, indices, augmentations, subjects, save_folder, output
                         #useful for test data
                 else:
                     #classification task
-                    print(classification[i])
                     if additional_inputs is not None:
                         np.savez("%s/%s.npz" % (save_folder, cpt), data = scan[xs : xf, ys : yf, zs : zf,: input_pos_end], group = classification[i],
                                  add_in = additional_inputs[i], sub = subjects[i])
