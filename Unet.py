@@ -115,8 +115,7 @@ class Unet(Model3D):
                 
         #Final layer
         if self.model_type == "segmentation" :
-            #Sigmoid if we want to perform a segmentation
-            x = self.convTranspose(1, self.filter_shape, strides = 1, padding = "same", activation = "sigmoid", kernel_initializer = self.weights_init)(x)
+            x = self.convTranspose(1, self.filter_shape, strides = 1, padding = "same", activation = "linear", kernel_initializer = self.weights_init)(x)
         elif self.model_type in  ["generation", "harmonization", "generation_bottleneck"] :
             #tanh if we want to perform a generation
             #tanh if we work with normalized data : between [-1; 1]
