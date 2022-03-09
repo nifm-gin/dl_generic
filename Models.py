@@ -198,7 +198,7 @@ class Model3D(object):
         return tf.train.Checkpoint(model=self.model,
                                    model_optimizer=self.optimizer[0])
     
-    def train(self, epochs = 10, steps = 100, val_on_cpu = False, burning_steps = 0):
+    def train(self, epochs = 10, val_on_cpu = False):
         """
         method to train our model
         """ 
@@ -243,7 +243,6 @@ class Model3D(object):
                             for key in c_metrics:
                                 metrics[key] += c_metrics[key]
                         cpt+=1
-                    print(metrics)
                     val_loss = self.get_scheduler_losses(metrics)
                     print("Val loss : %s " %  val_loss[0])
                     for key in metrics :
@@ -259,7 +258,7 @@ class Model3D(object):
                 print ('Time taken for epoch {} is {} sec\n'.format(e,
                                                                 time.time()-start))
         #Restore best model & Save model
-        writer.flush()
+        self.writer.flush()
         print("Restoring  best checkpoint")
         ckpt.restore(ckpt_manager.latest_checkpoint)
         self.model.save_weights(self.save_path + '/best.h5')

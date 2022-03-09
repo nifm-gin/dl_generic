@@ -201,8 +201,7 @@ if __name__ == "__main__":
         #             layer.trainable = False
         if  args.burning_steps > 0:
             model.burn_steps(args.burning_steps)
-        model.train(args.epochs, args.steps_per_epoch, args.val_on_cpu)
-        #model.model.load_weights(model.save_path + "/best.h5")
+        model.train(args.epochs, args.val_on_cpu)
         model.model.save_weights(model.save_path + '/final_model_weights.h5')
         print("Models weights saved.")
     if not args.train_only:

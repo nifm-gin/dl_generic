@@ -169,11 +169,11 @@ class CGAN(Model3D):
         except Exception as err:
             print("Could not restore latest checkpoint, continuing as if!", err)
 
-    def train(self, epochs = 10, steps = 25, val_on_cpu = False, burning_steps = 0):
+    def train(self, epochs = 10, val_on_cpu = False):
         """
         method to train our model
         """
-        super(CGAN, self).train(epochs, steps, val_on_cpu, burning_steps)
+        super(CGAN, self).train(epochs, val_on_cpu)
         self.discriminator.save_weights(self.save_path + '/best_d.h5')
         self.generator.save_weights(self.save_path + '/best_g.h5')
 
