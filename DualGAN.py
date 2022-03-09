@@ -59,10 +59,10 @@ class DualGAN(Model3D):
         # learning_rate = tf.train.exponential_decay(self.initial_learning_rate, tf.Variable(0, trainable = False), 
         #                                            5, 0.8, staircase=True)
         #Use several optimizer for each training
-        self.generator_A_optimizer = tf.keras.optimizers.Adam(lr = self.initial_learning_rate, beta_1=0.5)
-        self.generator_B_optimizer = tf.keras.optimizers.Adam(lr = self.initial_learning_rate, beta_1=0.5)
-        self.discriminator_A_optimizer = tf.keras.optimizers.Adam(lr = self.initial_learning_rate * 2, beta_1=0.5)
-        self.discriminator_B_optimizer = tf.keras.optimizers.Adam(lr = self.initial_learning_rate * 2, beta_1=0.5)
+        self.generator_A_optimizer = tf.keras.optimizers.Adam(lr = initial_learning_rate, beta_1=0.5)
+        self.generator_B_optimizer = tf.keras.optimizers.Adam(lr = initial_learning_rate, beta_1=0.5)
+        self.discriminator_A_optimizer = tf.keras.optimizers.Adam(lr = initial_learning_rate * 2, beta_1=0.5)
+        self.discriminator_B_optimizer = tf.keras.optimizers.Adam(lr = initial_learning_rate * 2, beta_1=0.5)
         self.optimizer = [self.generator_A_optimizer, self.generator_B_optimizer, self.discriminator_A_optimizer, self.discriminator_B_optimizer]
         self.scheduler = Scheduler(self.optimizer,
                                       ["Gen_A", "Gen_B", "Disc_A", "Disc_B"],
@@ -99,13 +99,13 @@ class DualGAN(Model3D):
     def build_model(self):
         #Build both generators => Unet
         self.generator_A = Unet(self.input_shape, self.data_path, self.num_channels, None, self.pool_size,
-                                4, self.dropout, self.batch_norm, self.initial_learning_rate,
+                                4, self.dropout, self.batch_norm,self.learning_rate,
                                 self.batch_size, "harmonization", self.padding, self.strides, None,
                                 self.save_path, self.activation, self.depth, self.features_factor,
                                 attention = False, name = "Unet_A").model
         
         self.generator_B = Unet(self.input_shape, self.data_path, self.num_channels, None, self.pool_size,
-                                4, self.dropout, self.batch_norm, self.initial_learning_rate,
+                                4, self.dropout, self.batch_norm, self.learning_rate,
                                 self.batch_size, "harmonization", self.padding, self.strides, None,
                                 self.save_path, self.activation, self.depth, self.features_factor,
                                 attention = False, name = "Unet_B").model
@@ -118,11 +118,11 @@ class DualGAN(Model3D):
         #Building discriminator :
         if self.model_type == "dualGAN":
             self.discriminator_A = CNN(self.input_shape, self.data_path, 1, None, self.pool_size,
-                                       self.filter_shape, self.dropout, self.batch_norm, self.initial_learning_rate * 2,
+                                       self.filter_shape, self.dropout, self.batch_norm, self.learning_rate * 2,
                                        self.batch_size, "discrimination", self.padding, self.strides, None,
                                        self.save_path, self.activation, 3, 64, 2, "CNN_A").model
             self.discriminator_B = CNN(self.input_shape, self.data_path, 1, None, self.pool_size,
-                                       self.filter_shape, self.dropout, self.batch_norm, self.initial_learning_rate * 2,
+                                       self.filter_shape, self.dropout, self.batch_norm, self.learning_rate * 2,
                                        self.batch_size, "discrimination", self.padding, self.strides, None,
                                        self.save_path, self.activation, 3, 64, 2, 'CNN_B').model
             
@@ -173,15 +173,17 @@ class DualGAN(Model3D):
                 # Generate data
                 for i, ID in enumerate(indexes):
                     #load patches
-                    X[i] = np.load("%s/B/train/%s.npy" % (self.data_path, ID % num_patches["B"])).reshape((*self.input_shape, self.num_channels))
-                    X2[i] = np.load("%s/A/train/%s.npy" % (self.data_path, ID % num_patches["A"])).reshape((*self.input_shape, self.num_channels))
+                    X[i] = np.load("%s/A/%s/%s.npz" % (self.data_path, data_type, ID))["data"].reshape((*self.input_shape, self.num_channels))
+                    X2[i] = np.load("%s/B/%s/%s.npz" % (self.data_path, data_type, ID))["data"].reshape((*self.input_shape, self.num_channels))
 
             else:
                 #validation data
                 for i in range(min_num_patches):
                     #load patches
-                    X[i] = np.load("%s/B/val/%s.npy" % (self.data_path, i)).reshape((*self.input_shape, self.num_channels))
-                    X2[i] = np.load("%s/A/val/%s.npy" % (self.data_path, i)).reshape((*self.input_shape, self.num_channels))
+
+                    X[i] = np.load("%s/A/%s/%s.npz" % (self.data_path, data_type, i))["data"].reshape((*self.input_shape, self.num_channels))
+                    X2[i] = np.load("%s/B/%s/%s.npz" % (self.data_path, data_type, i))["data"].reshape((*self.input_shape, self.num_channels))
+  
                     
                 indices = np.random.choice(X.shape[0], 400)
                 X, X2 = X[indices], X2[indices]
@@ -209,7 +211,7 @@ class DualGAN(Model3D):
                 ckpt.restore(ckpt_manager.latest_checkpoint)
                 print ('Latest checkpoint restored!!')
                 for opt in self.optimizer:
-                    opt.lr.assign(self.initial_learning_rate)
+                    opt.lr.assign(self.learning_rate)
         except:
             print("Could not restore latest checkpoint, continuing as if!")
         print("Start training")
@@ -277,7 +279,8 @@ class DualGAN(Model3D):
                 # Generate data
                 for i in range(num_patches):
                     #load patches
-                    X[i] = np.load("%s/%s/test/%s/%s.npy" % (self.data_path, site, subject_id, i)).reshape((*self.input_shape, self.num_channels))
+                    X[i] = np.load("%s/%s/test/%s/%s.npz" % (self.data_path, site, subject_id, i))["data"].reshape((*self.input_shape, self.num_channels))
+
                 y = self.generator_B.predict(X) if site == "A" else self.generator_A.predict(X)
                 if not os.path.exists("%s/%s/infered/%s/" % (self.save_path, site, subject_id)):
                     os.makedirs("%s/%s/infered/%s/" % (self.save_path, site, subject_id))
@@ -299,7 +302,7 @@ if __name__ == "__main__":
                         help='Depth of our Unet model, by default 4')
     parser.add_argument("-bs", '--batch_size', type = int, default = 16,
                         help='Batch size required for training, by default 16')
-    parser.add_argument("-lr", '--learning_rate', type = float, default = 0.0002,
+    parser.add_argument("-lr", '--initial_learning_rate', type = float, default = 0.0002,
                         help='Learning rate required to start our training, 10E-3 by default.')
     parser.add_argument("-s", '--strides', type = int, nargs = '+', default = 2,
                         help='Strides used for each convolutional layer, by default (2, 2, 2)')
@@ -366,7 +369,7 @@ if __name__ == "__main__":
                     num_channels = args.num_channels, batch_norm = args.batch_norm,
                     pool_size = args.pool_size, filter_shape = args.filter_size,
                     batch_size = args.batch_size, model_type = "dualGAN",
-                    initial_learning_rate = args.learning_rate,
+                    initial_learning_rate = args.initial_learning_rate,
                     strides = args.strides, depth = args.depth, weights_path_disc = args.weights_path_disc,
                     weights_path_gen_A = args.weights_path_gen_a, weights_path_gen_B = args.weights_path_gen_b,
                     weights_path = args.weights_path,

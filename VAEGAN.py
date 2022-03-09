@@ -149,16 +149,8 @@ class VAEGAN(CGAN):
                                                self.generator.trainable_variables))
         self.optimizer_disc.apply_gradients(zip(discriminator_gradients,
                                                 model.discriminator.trainable_variables))
-        if write:
-            with self.writer.as_default():
-                tf.summary.scalar('training_loss', self.train_loss.result(), step=epoch)
-                tf.summary.scalar('disc_loss', disc_loss, step=epoch)
-                try :
-                    tf.summary.scalar("LR", self.optimizer_gen.lr.lr, step = epoch)
-                except:
-                    tf.summary.scalar("LR", self.optimizer_gen.lr, step = epoch)
-                for t in gradients :
-                    tf.summary.histogram("Layer_%s " % t.name, data=t, step = epoch)
+        return {'training_loss': self.train_loss.result(),
+                'disc_loss' : disc_loss}
 
     @tf.function
     def val_step(self, inp, tar, epoch, on_cpu):
@@ -169,11 +161,6 @@ class VAEGAN(CGAN):
             generator_loss = vae_sigmoid_loss_logits(gen_output, inp, z, mean, logvar)
             disc_loss = discriminator_loss(disc_real_output, disc_fake_output)
             loss = generator_loss + 100 * disc_loss
-            
-            with self.writer.as_default():
-                tf.summary.scalar('total_val_loss', loss, step=epoch)
-                tf.summary.scalar('disc_val_loss', disc_loss, step=epoch)
-                
-            return [loss, disc_loss]
-
+            return {'total_val_loss' : loss,
+                    'disc_val_loss' : disc_loss}
 

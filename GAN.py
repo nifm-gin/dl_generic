@@ -1,4 +1,3 @@
-
 import sys
 import tensorflow as tf
 from tensorflow.keras.layers import Conv3D, MaxPool3D, BatchNormalization, Concatenate, Conv3DTranspose, Conv2D, MaxPool2D, Conv2DTranspose, ReLU
@@ -200,13 +199,9 @@ class CGAN(Model3D):
                                                self.generator.trainable_variables))
         self.optimizer_disc.apply_gradients(zip(discriminator_gradients,
                                                 self.discriminator.trainable_variables))
-        if write :
-            with self.writer.as_default():
-                tf.summary.scalar('total_gen_loss', total_gen_loss, step=epoch)
-                tf.summary.scalar('disc_loss', disc_loss, step=epoch)
-                for t in discriminator_gradients :
-                    tf.summary.histogram("disc_%s " % t.name, data=t, step = epoch)
-
+        return {'total_gen_loss' : total_gen_loss,
+                'disc_loss' : disc_loss}
+    
     @tf.function
     def val_step_GAN(self, input_image, target, epoch, on_cpu):
         with tf.device('/device:%s:0' % "CPU" if on_cpu else "GPU"):
@@ -218,7 +213,5 @@ class CGAN(Model3D):
             total_gen_loss, gan_loss, l1_loss = cgan_generator_loss(disc_fake_output, gen_output, target)
             disc_loss = discriminator_loss(disc_real_output, disc_fake_output)
 
-            with self.writer.as_default():
-                tf.summary.scalar('total_gen_val_loss', total_gen_loss, step=epoch)
-                tf.summary.scalar('disc_val_loss', disc_loss, step=epoch)
-            return [total_gen_loss, disc_loss]
+            return {'total_gen_val_loss' : total_gen_loss,
+                    'disc_val_loss' : disc_loss}

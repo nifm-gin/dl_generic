@@ -105,7 +105,7 @@ class VAE(Model3D):
         self.model.summary()
         
     @tf.function
-    def train_step(self, inp, y, epoch, write = False):
+    def train_step(self, inp, y):
         #Shifting input and target doesnt make sense here as our images always have the same dimensions
         with tf.GradientTape() as tape:
             predictions, z, mean, logvar = self.model(inp, training = True)
@@ -113,25 +113,13 @@ class VAE(Model3D):
         self.train_loss(loss)
         gradients = tape.gradient(loss, self.model.trainable_variables)    
         self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
-        if write:
-            with self.writer.as_default():
-                tf.summary.scalar('training_loss', self.train_loss.result(), step=epoch)
-                try :
-                    tf.summary.scalar("LR", self.optimizer.lr.lr, step = epoch)
-                except:
-                    tf.summary.scalar("LR", self.optimizer.lr, step = epoch)
-                for t in gradients :
-                    tf.summary.histogram("Layer_%s " % t.name, data=t, step = epoch)
-
+        return {'val_loss' : self.train_loss.result()}
     @tf.function
-    def val_step(self, inp, tar, epoch, on_cpu):
+    def val_step(self, inp, tar, on_cpu):
         with tf.device('/device:%s:0' % "CPU" if on_cpu else "GPU"):
             predictions, z, mean, logvar = self.model(inp, training = False)
-            
             loss = self.loss(predictions, inp, z, mean, logvar)
-            with self.writer.as_default():
-                tf.summary.scalar('Val_loss', loss, step=epoch)
-            return loss
+            return {"val_loss" : loss}
 
     def data_generator(self, data_type = 'train'):
         """

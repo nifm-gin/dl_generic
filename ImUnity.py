@@ -113,7 +113,7 @@ class ImUnity(VAEGAN):
         except Exception as err:
             print("Could not restore latest checkpoint, continuing as if!", err)
 
-    def dagan_generator_loss(self, x, generated, x_gen, style, z_style, z, mean, logvar, z_generated, disc_generated_output, modules_generated_output, target, epoch):
+    def dagan_generator_loss(self, x, generated, x_gen, style, z_style, z, mean, logvar, z_generated, disc_generated_output, modules_generated_output, target):
         z, z_generated, z_style = Flatten()(z), Flatten()(z_generated), Flatten()(z_style)
         mask = tf.math.greater_equal(x, tf.constant(0.001, dtype = tf.float32))
 
@@ -143,7 +143,7 @@ class ImUnity(VAEGAN):
         return total_gen_loss, gan_loss, gan_loss_modules, l1_loss_cost, l1_loss_style, kl, l1_loss_shift, ss_loss
 
 
-    def train_step(self, X, y, epoch, write = False):
+    def train_step(self, X, y):
         Y = y[0][0]
         X_gamma = y[0][1]
         y = y[1:]
@@ -154,7 +154,7 @@ class ImUnity(VAEGAN):
             (_, z_style, _, _, _) = self.generator([Y, Y], training=True)
             #uncomment line if you want to force indentity preservation for contrast=anatomical  input
             #(X_gen, _, _, _, _) = self.generator([X, X], training=True)
-            X_gen = X
+            X_gen = X.copy()
             #We could also consider latent space representation of input and harmonized data (should be close in the anatomical latent space) and force this closeness using contrastive loss
             gen_output_sig = tf.sigmoid(gen_output)
             (_, z_generated, _, _, _) = self.generator([gen_output_sig, Y], training=True)
@@ -166,7 +166,7 @@ class ImUnity(VAEGAN):
                 modules_output = [modules_output]
             # compute losses
             disc_loss = discriminator_loss(disc_real_output, disc_fake_output)
-            total_gen_loss, gan_loss, gen_loss_modules, l1_loss_cost, l1_loss_style, kl, l1_loss_shift, ss_loss = self.dagan_generator_loss(X, gen_output, X_gen, X_gamma, z_style, z, mean, logvar, z_generated, disc_fake_output, modules_output, y.copy(), epoch)
+            total_gen_loss, gan_loss, gen_loss_modules, l1_loss_cost, l1_loss_style, kl, l1_loss_shift, ss_loss = self.dagan_generator_loss(X, gen_output, X_gen, X_gamma, z_style, z, mean, logvar, z_generated, disc_fake_output, modules_output, y.copy())
             #We create the associate sample_weight for computing the loss (sites might not be equally represented)
             sample_weight = [np.dot(y[0], self.class_weights) if self.class_weights is not None else None, None, None]
             if self.num_sequences > 1:
@@ -190,25 +190,18 @@ class ImUnity(VAEGAN):
                                                 self.discriminator.trainable_variables))
         self.optimizer_modules.apply_gradients(zip(modules_gradients,
                                                    self.modules.trainable_variables))
-        if write :
-            epoch = tf.constant(epoch, dtype = tf.int64)
-            with self.writer.as_default():
-                tf.summary.scalar('total_gen_loss', total_gen_loss, step=epoch)
-                tf.summary.scalar('l1_loss_cost', l1_loss_cost, step=epoch)
-                tf.summary.scalar('l1_loss_shift', l1_loss_shift, step=epoch)
-                tf.summary.scalar('l1_loss_style', l1_loss_style, step=epoch)
-                tf.summary.scalar('disc_loss', disc_loss, step=epoch)
-                tf.summary.scalar('gan_disc_loss', gan_loss, step=epoch)
-                tf.summary.scalar('modules_loss', modules_loss, step=epoch)
-                tf.summary.scalar('modules_confusion_loss', gen_loss_modules, step=epoch)
-                tf.summary.scalar('kl_loss', kl, step=epoch)
-                tf.summary.scalar('ssim_loss', ss_loss, step=epoch)
-                try :
-                    tf.summary.scalar("LR", self.optimizer_gen.lr.lr, step = epoch)
-                except:
-                    tf.summary.scalar("LR", self.optimizer_gen.lr, step = epoch)
+        return {'total_gen_loss': total_gen_loss,
+                'l1_loss_cost' : l1_loss_cost,
+                'l1_loss_shift' : l1_loss_shift,
+                'l1_loss_style' : l1_loss_style,
+                'disc_loss' : disc_loss,
+                'gan_disc_loss' : gan_loss,
+                'modules_loss' : modules_loss,
+                'modules_confusion_loss' : gen_loss_modules,
+                'kl_loss' : kl,
+                'ssim_loss' : ss_loss}
 
-    def val_step(self, X, y, epoch, on_cpu = False):
+    def val_step(self, X, y, on_cpu = False):
         Y = y[0][0]
         X_gamma = y[0][1]
         y = y[1:]
@@ -217,7 +210,7 @@ class ImUnity(VAEGAN):
             (gen_output, z, mean, logvar, z_anat) = self.generator([X, Y], training=False)
             (_, z_style, _, _, _) = self.generator([Y, Y], training=False)
             #(X_gen, _, _, _, _) = self.generator([X, X], training=False)
-            X_gen = X
+            X_gen = X.copy()
             gen_output_sig = tf.sigmoid(gen_output)
             (_, z_generated, _, _, _) = self.generator([gen_output_sig, Y], training=False)
             disc_real_output = self.discriminator(X_gamma, training=False)
@@ -227,34 +220,37 @@ class ImUnity(VAEGAN):
                 modules_output = [modules_output]
             # compute losses
             disc_loss = discriminator_loss(disc_real_output, disc_fake_output)
-            total_gen_loss, gan_loss, gen_loss_modules, l1_loss_cost, l1_loss_style, kl, l1_loss_shift, ss_loss = self.dagan_generator_loss(X, gen_output, X_gen, X_gamma, z_style, z, mean, logvar, z_generated, disc_fake_output, modules_output, y.copy(), epoch)
+            total_gen_loss, gan_loss, gen_loss_modules, l1_loss_cost, l1_loss_style, kl, l1_loss_shift, ss_loss = self.dagan_generator_loss(X, gen_output, X_gen, X_gamma, z_style, z, mean, logvar, z_generated, disc_fake_output, modules_output, y.copy())
             modules_loss = sum([self.loss_ratios[i] * loss(y[i], modules_output[i]) for i, loss in enumerate(self.modules_loss)])
-            epoch = tf.constant(epoch, dtype = tf.int64)
-            with self.writer.as_default():
-                tf.summary.scalar('total_gen_val_loss', total_gen_loss, step=epoch)
-                tf.summary.scalar('l1_val_loss_cost', l1_loss_cost, step=epoch)
-                tf.summary.scalar('l1_loss_shift', l1_loss_shift, step=epoch)
-                tf.summary.scalar('l1_loss_style_val', l1_loss_style, step=epoch)
-                tf.summary.scalar('disc_val_loss', disc_loss, step=epoch)
-                tf.summary.scalar('gan_disc_val_loss', gan_loss, step=epoch)
-                tf.summary.scalar('modules_val_loss', modules_loss, step=epoch)
-                tf.summary.scalar('modules_confusion_val_loss', gen_loss_modules, step=epoch)
-                tf.summary.scalar('kl_val_loss', kl, step=epoch)
-                tf.summary.scalar('ssim_val_loss', ss_loss, step=epoch)
-            return [total_gen_loss, disc_loss, modules_loss]
+            return {'total_gen_val_loss' : total_gen_loss,
+                'l1_val_loss_cost' : l1_loss_cost,
+                'l1_loss_shift' : l1_loss_shift,
+                'l1_loss_style_val' : l1_loss_style,
+                'disc_val_loss' : disc_loss,
+                'gan_disc_val_loss' : gan_loss,
+                'modules_val_loss' : modules_loss,
+                'modules_confusion_val_loss' : gen_loss_modules,
+                'kl_val_loss' : kl,
+                'ssim_val_loss' : ss_loss}
 
+    def  get_scheduler_losses(self, metrics):
+        return [metrics[key] for key in ['total_gen_val_loss', 'disc_val_loss', 'modules_val_loss']]
+    
+    
     def data_generator(self):
         num_patches = np.load("%s/train/nb_patches.npy" % (self.data_path))
+        num_steps = num_patches // self.batch_size
         X = np.empty((self.batch_size, *self.input_shape, self.num_channels), dtype = np.float32)
         Y = np.empty((2, self.batch_size, *self.input_shape, self.num_channels), dtype = np.float32)
         sub_dict = None
+        indices = np.arange(num_patches); np.random.shuffle(indices)
         with open("%s/train/subjects_patches.pkl" % (self.data_path), "rb") as f:
             sub_dict = pickle.load(f)
-        while True:
+        for i in range(num_steps):
             label_site = np.zeros((self.batch_size, 1 if self.num_sites == 2 else self.num_sites))
             label_sequence = np.zeros((self.batch_size, 1 if self.num_sequences == 2 else self.num_sequences))
             labels_bio = np.zeros((len(self.biological_features), self.batch_size,1)) if self.biological_features is not None else []
-            indexes = np.random.choice(num_patches, self.batch_size)
+            indexes = indices[i * self.batch_size : (i + 1) * self.batch_size]
             # Generate data
             for i, ID in enumerate(indexes):
                 #load patches
@@ -295,52 +291,58 @@ class ImUnity(VAEGAN):
                 yield X, [Y, label_site] + labels_bio + [label_sequence] * (self.num_sequences > 1)
             else:
                 yield X, [Y, label_site] + [label_sequence] * (self.num_sequences > 1)
-
+        yield None, None
+                
     def generator_val(self):
         """
         iterator that feeds our model
         ran in parrallel to training (meant to)
         """
         num_patches = np.load("%s/val/nb_patches.npy" % (self.data_path))
-        X = np.empty((num_patches, *self.input_shape, self.num_channels), dtype = np.float32)
-        Y = np.empty((2, num_patches, *self.input_shape, self.num_channels), dtype = np.float32)
-        y_site = np.zeros((num_patches, 1 if self.num_sites == 2 else self.num_sites))
-        labels_bio = np.zeros((len(self.biological_features), num_patches, 1)) if self.biological_features is not None else []
-        y_sequence = np.zeros((num_patches, 1 if self.num_sequences == 2 else self.num_sequences))
+        num_steps = num_patches // self.batch_size
+        X = np.empty((self.batch_size, *self.input_shape, self.num_channels), dtype = np.float32)
+        Y = np.empty((2, self.batch_size, *self.input_shape, self.num_channels), dtype = np.float32)
+        y_site = np.zeros((self.batch_size, 1 if self.num_sites == 2 else self.num_sites))
+        labels_bio = np.zeros((len(self.biological_features), self.batch_size, 1)) if self.biological_features is not None else []
+        y_sequence = np.zeros((self.batch_size, 1 if self.num_sequences == 2 else self.num_sequences))
         sub_dict = None
         with open("%s/val/subjects_patches.pkl" % (self.data_path), "rb") as f:
             sub_dict = pickle.load(f)
-        for i in range(num_patches):
-            data = np.load("%s/val/%s.npz" % (self.data_path, i), allow_pickle = True)
-            X[i] = data["data"].reshape((*self.input_shape, self.num_channels))
-            sub1 = float(data["sub"])
-            ID2 = np.random.randint(sub_dict[sub1][0], sub_dict[sub1][1])
-            data2 = np.load("%s/val/%s.npz" % (self.data_path, ID2))
-            Y[0, i] = data2["data"].reshape((*self.input_shape, self.num_channels))
-            Y[1, i] = X[i] 
-            Y[:, i] = gamma(Y[:, i])
-            if self.num_sites == 2:
-                y_site[i] = data["group"].item()["Group"]
+        for i in range(num_steps):
+            indexes = np.arange(i * self.batch_size, (i + 1) * self.batch_size)
+            # Generate data
+            for i, ID in enumerate(indexes):
+                data = np.load("%s/val/%s.npz" % (self.data_path, ID), allow_pickle = True)
+                X[i] = data["data"].reshape((*self.input_shape, self.num_channels))
+                sub1 = float(data["sub"])
+                ID2 = np.random.randint(sub_dict[sub1][0], sub_dict[sub1][1])
+                data2 = np.load("%s/val/%s.npz" % (self.data_path, ID2))
+                Y[0, i] = data2["data"].reshape((*self.input_shape, self.num_channels))
+                Y[1, i] = X[i] 
+                Y[:, i] = gamma(Y[:, i])
+                if self.num_sites == 2:
+                    y_site[i] = data["group"].item()["Group"]
+                else:
+                    y_site[i][int(data["group"].item()["Group"])] = 1
+                try:
+                    if self.biological_features is not None :
+                        for n, name in enumerate(self.biological_features):
+                            if self.loss_ratios[n] > 0:
+                                labels_bio[n, i] = data["group"].item()[name]
+                    if self.num_sequences == 2:
+                        y_sequence[i] = data["group"].item()["Sequence"]
+                    elif self.num_sequences > 2:
+                        y_sequence[i][int(data["group"].item()["Sequence"])] = 1
+                except:
+                    #case no sex or asd specified
+                    pass
+            labels_bio = [l for l in labels_bio]
+            if self.biological_features is not None:
+                yield X, [Y, y_site] + labels_bio + [y_sequence] * (self.num_sequences > 1)
             else:
-                y_site[i][int(data["group"].item()["Group"])] = 1
-            try:
-                if self.biological_features is not None :
-                    for n, name in enumerate(self.biological_features):
-                        if self.loss_ratios[n] > 0:
-                            labels_bio[n, i] = data["group"].item()[name]
-                if self.num_sequences == 2:
-                    y_sequence[i] = data["group"].item()["Sequence"]
-                elif self.num_sequences > 2:
-                    y_sequence[i][int(data["group"].item()["Sequence"])] = 1
-            except:
-                #case no sex or asd specified
-                pass
-        labels_bio = [l for l in labels_bio]
-        if self.biological_features is not None:
-            return X, [Y, y_site] + labels_bio + [y_sequence] * (self.num_sequences > 1)
-        else:
-            return X, [Y, y_site] + [y_sequence] * (self.num_sequences > 1)
-
+                yield X, [Y, y_site] + [y_sequence] * (self.num_sequences > 1)
+        yield None, None
+        
     def infer_subject(self, sub_path, contrast, num_patches):
         X = np.empty((num_patches, *self.input_shape, self.num_channels))
         y = np.empty((num_patches, *self.input_shape, 1))

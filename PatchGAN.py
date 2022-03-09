@@ -18,11 +18,9 @@ os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 # PatchGAN model #
 
 ####################################################################################################
-
 depth_2_window_size = {2 : 10,
                        3 : 22,
                        4 : 46}
-
 class PatchGAN(Model3D):
     """
     PatchGAN model that heritates from Models class  

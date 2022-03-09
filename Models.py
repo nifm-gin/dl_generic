@@ -150,7 +150,7 @@ class Model3D(object):
             print("Could not restore latest checkpoint, continuing as if!", err)
 
     #@tf.function
-    def train_step(self, inp, y, epoch, write = False):
+    def train_step(self, inp, y):
         #Shifting input and target doesnt make sense here as our images always have the same dimensions
         with tf.GradientTape() as tape:
             predictions = self.model(inp, training = True)
@@ -168,18 +168,10 @@ class Model3D(object):
         self.train_loss(loss)
         gradients = tape.gradient(loss, self.model.trainable_variables)    
         self.optimizer[0].apply_gradients(zip(gradients, self.model.trainable_variables))
-        if write:
-            with self.writer.as_default():
-                tf.summary.scalar('training_loss', self.train_loss.result(), step=epoch)
-                try :
-                    tf.summary.scalar("LR", self.optimizer[0].lr.lr, step = epoch)
-                except:
-                    tf.summary.scalar("LR", self.optimizer[0].lr, step = epoch)
-                for t in gradients :
-                    tf.summary.histogram("Layer ", data=t, step = epoch)
+        return {'training_loss' : loss}
 
 #    @tf.function
-    def val_step(self, inp, tar, epoch, on_cpu):
+    def val_step(self, inp, tar, on_cpu):
         with tf.device('/device:%s:0' % "CPU" if on_cpu else "GPU"):
             predictions = self.model(inp, training = False)
             if self.class_weights != None:
@@ -192,22 +184,20 @@ class Model3D(object):
                 loss = self.loss(tar, predictions, sample_weight = sample_weight)
             else:
                 loss = self.loss(tar, predictions)
-            with self.writer.as_default():
-                tf.summary.scalar('Val_loss', loss, step=epoch)
-            return loss
+            return {'val_loss' : loss}
         
     def burn_steps(self, n_steps):
         print("Burning %s steps" % n_steps)
         for cpt, (X, y) in enumerate(self.data_generator()):
-            self.train_step(X, y, tf.constant(cpt, dtype = tf.int64))
-            if cpt == n_steps:
-                break
+            if cpt == n_steps or X is None:
+                return
+            self.train_step(X, y)
         #Restore true optimizer so we can start training properly
 
     def get_checkpoint(self):
         return tf.train.Checkpoint(model=self.model,
                                    model_optimizer=self.optimizer[0])
-            
+    
     def train(self, epochs = 10, steps = 100, val_on_cpu = False, burning_steps = 0):
         """
         method to train our model
@@ -215,39 +205,67 @@ class Model3D(object):
         checkpoint_path = self.save_path + "/checkpoints/train"
         ckpt = self.get_checkpoint()
         ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
-        if burning_steps > 0:
-            self.burn_steps(burning_steps)
         print("Start training")
-        A_val, B_val = self.generator_val()
         #loading validation data only once
-        for e in range(1, epochs):
-            self.train_loss.reset_states()
-            start = time.time()
-            for cpt, (X, y) in enumerate(self.data_generator()):
-                self.train_step(X, y, tf.constant(e, dtype = tf.int64), write = (cpt == steps))
-                if cpt == steps:
-                    print ('.', end='')
-                    break
-            #Validation step
-            if e % 5 == 0:
-                val_loss = self.val_step(A_val, B_val, tf.constant(e, dtype = tf.int64), val_on_cpu)
-                scheduler_output = self.scheduler.update(val_loss if isinstance(val_loss, list) else [val_loss])
-                if scheduler_output == "stop":
-                    print('Early stopping reached !')
-                    break
-                elif scheduler_output:
-                    ckpt_save_path = ckpt_manager.save()
-                    print ('Saving checkpoint for epoch {} at {}'.format(e,
+        with self.writer.as_default():
+            for e in range(1, epochs):
+                metrics, cpt = None, 0
+                start = time.time()
+                self.train_loss.reset_states()
+                for (X, y) in self.data_generator():
+                    if X is None:
+                        break
+                    if metrics is None:
+                        metrics  = self.train_step(X, y)
+                    else:
+                        c_metrics = self.train_step(X, y)
+                        for key in c_metrics:
+                            metrics[key] += c_metrics[key]
+                    cpt+=1
+                print('Loss for Epoch %s : %s' % (e, self.train_loss.result().numpy()))
+                for key in metrics :
+                    tf.summary.scalar(key, metrics[key] / cpt, step = e)
+                try :
+                    tf.summary.scalar("LR", self.optimizer_gen.lr.lr, step = e)
+                except:
+                    tf.summary.scalar("LR", self.optimizer_gen.lr, step = e)
+
+                #Validation step
+                if e % 5 == 0:
+                    metrics, cpt = None, 0
+                    for (X, y) in self.generator_val():
+                        if X is None:
+                            break
+                        if metrics is None:
+                            metrics = self.val_step(X, y)
+                        else:
+                            c_metrics = self.val_step(X, y)
+                            for key in c_metrics:
+                                metrics[key] += c_metrics[key]
+                        cpt+=1
+                    print(metrics)
+                    val_loss = self.get_scheduler_losses(metrics)
+                    print("Val loss : %s " %  val_loss[0])
+                    for key in metrics :
+                        tf.summary.scalar(key, metrics[key] / cpt, step = e)
+                    scheduler_output = self.scheduler.update(val_loss)
+                    if scheduler_output == "stop":
+                        print('Early stopping reached !')
+                        break
+                    elif scheduler_output:
+                        ckpt_save_path = ckpt_manager.save()
+                        print ('Saving checkpoint for epoch {} at {}'.format(e,
                                                                          ckpt_save_path))
-                print("Val loss : %s " %  val_loss[0].numpy() if isinstance(val_loss, list) else val_loss.numpy())
-            print('Loss for Epoch %s : %s' % (e, self.train_loss.result().numpy()))
-            print ('Time taken for epoch {} is {} sec\n'.format(e,
+                print ('Time taken for epoch {} is {} sec\n'.format(e,
                                                                 time.time()-start))
         #Restore best model & Save model
+        writer.flush()
         print("Restoring  best checkpoint")
         ckpt.restore(ckpt_manager.latest_checkpoint)
         self.model.save_weights(self.save_path + '/best.h5')
 
+    def  get_scheduler_losses(self, metrics):
+        return [metrics[key] for key in metrics]
     
     def self_pretrain(self, epochs = 10, steps = 25, val_on_cpu = False):
         """
@@ -388,30 +406,37 @@ class Model3D(object):
         ran in parrallel to training (meant to)
         """
         num_patches = np.load("%s/val/nb_patches.npy" % (self.data_path))
+        num_steps = num_patches // self.batch_size
         X = np.empty((num_patches, *self.input_shape, self.num_channels))
         y = np.empty((num_patches, *self.input_shape, 1))
-        for i in range(num_patches):
-            X[i] = np.load("%s/val/%s.npz" % (self.data_path, i))["data"].reshape((*self.input_shape, self.num_channels))
-            y[i] = np.load("%s/val/output_%s.npy" % (self.data_path, i)).reshape((*self.input_shape, 1))
-        return X, y
-    
+        for i in range(num_steps):
+            indexes = np.arange(i * self.batch_size, (i + 1) * self.batch_size)
+            # Generate data
+            for i, ID in enumerate(indexes):
+                X[i] = np.load("%s/val/%s.npz" % (self.data_path, ID))["data"].reshape((*self.input_shape, self.num_channels))
+                y[i] = np.load("%s/val/output_%s.npy" % (self.data_path, ID)).reshape((*self.input_shape, 1))
+                yield X, y
+        yield None, None
+        
     def data_generator(self, data_type = 'train'):
         """
         iterator that feeds our model
         ran in parrallel to training (meant to)
         """
         num_patches = np.load("%s/%s/nb_patches.npy" % (self.data_path, data_type))
-        while True:
-            indexes = np.random.choice(num_patches, self.batch_size)
-            X = np.empty((self.batch_size, *self.input_shape, self.num_channels))
-            y = np.empty((self.batch_size, *self.input_shape, 1))
-            
+        num_steps = num_patches // self.batch_size
+        indices = np.arange(num_patches); np.random.shuffle(indices)
+        X = np.empty((self.batch_size, *self.input_shape, self.num_channels))
+        y = np.empty((self.batch_size, *self.input_shape, 1))
+        for i in range(num_steps):
+            indexes = indices[i * self.batch_size : (i + 1) * self.batch_size]
             # Generate data
             for i, ID in enumerate(indexes):
-                 #load patches
+                #load patches
                 X[i] = np.load("%s/%s/%s.npz" % (self.data_path, data_type, ID))["data"].reshape((*self.input_shape, self.num_channels))
                 y[i] = np.load("%s/%s/output_%s.npy" % (self.data_path, data_type, ID)).reshape((*self.input_shape, 1))
-            yield X, y.reshape((indexes.shape[0], *self.input_shape, 1))
+                yield X, y.reshape((indexes.shape[0], *self.input_shape, 1))
+        yield None, None
 
     def infer(self, is_gan = False, saliency = False):
         """

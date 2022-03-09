@@ -23,6 +23,8 @@ if __name__ == "__main__":
                         help='Depth of our Unet model, by default (3,3,3)')
     parser.add_argument("-bs", '--batch_size', type = int, default = 8,
                         help='Batch size required for training, by default 8')
+    parser.add_argument('--burning_steps', type = int, default = 0,
+                        help='Burning steps to run before training, default : 0')
     parser.add_argument("-lr", '--learning_rate', type = float, default = 0.001,
                         help='Learning rate required to start our training, 10E-3 by default.')
     parser.add_argument("-nc", '--num_channels', type = int, default = 1,
@@ -175,7 +177,7 @@ if __name__ == "__main__":
                        strides = args.strides, depth = args.depth, weights_path = args.weights_path,
                        save_path = args.save_path, features_factor = args.features_factor,
                        latent_dim = args.latent_dim)
-    
+
     else:
         from ClassificationTransformer import ClassificationTransformer
         model = ClassificationTransformer(input_shape = tuple(args.input_shape), data_path = args.data_path, patch_shape = args.patch_shape,
@@ -197,8 +199,9 @@ if __name__ == "__main__":
         #     except:
         #         for layer in model.model.layers[:2]:
         #             layer.trainable = False
-            
-        model.train(args.epochs, args.steps_per_epoch, args.val_on_cpu, burning_steps = 100)
+        if  args.burning_steps > 0:
+            model.burn_steps(args.burning_steps)
+        model.train(args.epochs, args.steps_per_epoch, args.val_on_cpu)
         #model.model.load_weights(model.save_path + "/best.h5")
         model.model.save_weights(model.save_path + '/final_model_weights.h5')
         print("Models weights saved.")

@@ -123,22 +123,15 @@ class VisionTransformer(Model3D):
         gradients = tape.gradient(loss, self.model.trainable_variables)    
         self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
         self.train_loss(loss)
-        if write:
-            with self.writer.as_default():
-                tf.summary.scalar('L1_loss', self.train_loss.result(), step=epoch)
-                tf.summary.scalar("LR", self.optimizer.lr.lr, step = epoch)
-                for t in gradients :
-                    tf.summary.histogram("Layer_%s " % t.name, data=t, step = epoch)
-                #self.model.load_weights(self.save_path + "/best.h5")
-       
+        return {'L1_loss' : self.train_loss.result()}
+                
     @tf.function
     def val_step(self, inp, tar, epoch, on_cpu):
         with tf.device('/device:%s:0' % "CPU" if on_cpu else "GPU"):
             predictions, _ = self.model(inp, training = False)
             loss = calc_l1_loss(tar, predictions)
             loss = tf.reduce_mean(tf.abs(tf.boolean_mask(real_image, mask) - tf.boolean_mask(cycled_image, mask)))
-            with self.writer.as_default():
-                tf.summary.scalar('L1_val_loss', loss, step=epoch)
+            return{'L1_val_loss' : loss}
     
     def get_patches(self, X):
         patches = []
